@@ -26,7 +26,7 @@ def clean_price(price_input):
     try: return float(s)
     except ValueError: return 0.0
 
-def scrape_category(target_url, folder_id):
+def scrape_category(target_url, folder_id, owner_username):
     """
     Scrapes products from a category page and inserts them into the DB linked to folder_id.
     """
@@ -182,7 +182,8 @@ def scrape_category(target_url, folder_id):
             for p in products_on_page:
                 # Check esistenza in questa cartella (per URL o Nome)
                 # Preferiamo URL se disponibile, altrimenti Nome
-                query = supabase.table("products").select("*").eq("folder_id", folder_id)
+                # Check esistenza nel contesto dell'utente specifico
+                query = supabase.table("products").select("*").eq("folder_id", folder_id).eq("owner_username", owner_username)
                 if p.get("url"):
                     query = query.eq("url", p["url"])
                 else:
@@ -203,7 +204,8 @@ def scrape_category(target_url, folder_id):
                     # Non tocchiamo is_tracked!
                     
                     try:
-                        supabase.table("products").update(update_payload).eq("id", prod_id).execute()
+                        # Update specifico per ID e Owner (sicurezza)
+                        supabase.table("products").update(update_payload).eq("id", prod_id).eq("owner_username", owner_username).execute()
                         count += 1
                     except Exception as e:
                         print(f"Update error: {e}")
@@ -215,7 +217,9 @@ def scrape_category(target_url, folder_id):
                         "categoria": p["categoria"],
                         "descrizione": p["descrizione"],
                         "marchio": p["marchio"],
+                        "marchio": p["marchio"],
                         "prezzo": p["prezzo"],
+                        "owner_username": owner_username,
                         "is_tracked": False # Default False per nuovi
                     }
                     if p.get("url"):
@@ -238,7 +242,7 @@ def scrape_category(target_url, folder_id):
 
     return 1
 
-def scrape_single_product_insert(url, folder_id):
+def scrape_single_product_insert(url, folder_id, owner_username):
     """
     Scrapes a single product and inserts it into the folder.
     """
@@ -264,7 +268,9 @@ def scrape_single_product_insert(url, folder_id):
             "descrizione": title,
             "marchio": "Manual",
             "prezzo": price,
+            "prezzo": price,
             "url": url, # FIX RICHIESTO
+            "owner_username": owner_username,
             "is_tracked": False
         }).execute()
         return True, None

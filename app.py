@@ -182,27 +182,28 @@ def get_users():
     return response.data
 
 @st.cache_data(ttl=60)
-def get_reference_site():
-    response = supabase.table("reference_site").select("*").execute()
+def get_reference_site(owner):
+    response = supabase.table("reference_site").select("*").eq("owner_username", owner).execute()
     return response.data
 
 @st.cache_data(ttl=60)
-def get_report_recipients():
-    response = supabase.table("report_recipients").select("*").order("created_at", desc=True).execute()
+def get_report_recipients(owner):
+    response = supabase.table("report_recipients").select("*").eq("owner_username", owner).order("created_at", desc=True).execute()
     return response.data
 
 @st.cache_data(ttl=60)
-def get_competitors():
-    response = supabase.table("competitors").select("*").execute()
+def get_competitors(owner):
+    response = supabase.table("competitors").select("*").eq("owner_username", owner).execute()
     return response.data
 
-def add_report_recipient(client_name, target_email, report_frequency, target_website):
+def add_report_recipient(client_name, target_email, report_frequency, target_website, owner):
     try:
         supabase.table("report_recipients").insert({
             "client_name": client_name,
             "target_email": target_email,
             "report_frequency": report_frequency,
-            "target_website": target_website
+            "target_website": target_website,
+            "owner_username": owner
         }).execute()
         return True, None
     except Exception as e:
@@ -218,36 +219,38 @@ def add_user(username, password):
     except Exception as e:
         return False, str(e)
 
-def add_reference_site(nome, url):
+def add_reference_site(nome, url, owner):
     try:
         supabase.table("reference_site").insert({
             "nome": nome,
-            "url": url
+            "url": url,
+            "owner_username": owner
         }).execute()
         return True, None
     except Exception as e:
         return False, str(e)
 
-def add_competitor(nome, url, note):
+def add_competitor(nome, url, note, owner):
     try:
         supabase.table("competitors").insert({
             "nome": nome,
             "url": url,
-            "note": note
+            "note": note,
+            "owner_username": owner
         }).execute()
         return True, None
     except Exception as e:
         return False, str(e)
 
 @st.cache_data(ttl=60)
-def get_products():
-    response = supabase.table("products").select("*").order("descrizione").execute()
+def get_products(owner):
+    response = supabase.table("products").select("*").eq("owner_username", owner).order("descrizione").execute()
     return response.data
 
-def get_competitors_map():
+def get_competitors_map(owner):
     """Ritorna un dizionario {competitor_id: competitor_name}"""
     try:
-        data = supabase.table("competitors").select("id, nome").execute().data
+        data = supabase.table("competitors").select("id, nome").eq("owner_username", owner).execute().data
         return {c['id']: c['nome'] for c in data}
     except:
         return {}
@@ -261,22 +264,23 @@ def update_product_tracking(product_id, is_tracked):
 
 # --- FOLDER HELPERS ---
 @st.cache_data(ttl=60)
-def get_folders():
-    response = supabase.table("folders").select("*").order("created_at", desc=True).execute()
+def get_folders(owner):
+    response = supabase.table("folders").select("*").eq("owner_username", owner).order("created_at", desc=True).execute()
     return response.data
 
-def create_folder(name, url):
+def create_folder(name, url, owner):
     try:
         supabase.table("folders").insert({
             "name": name,
-            "source_url": url
+            "source_url": url,
+            "owner_username": owner
         }).execute()
         return True, None
     except Exception as e:
         return False, str(e)
 
-def get_products_by_folder(folder_id):
-    response = supabase.table("products").select("*").eq("folder_id", folder_id).order("id").execute()
+def get_products_by_folder(folder_id, owner):
+    response = supabase.table("products").select("*").eq("folder_id", folder_id).eq("owner_username", owner).order("id").execute()
     return response.data
 
 def get_domain(url):
@@ -318,7 +322,7 @@ def clean_search_query(description):
 
 # --- FUNZIONI REPORT EMAIL ---
 
-def generate_pdf_report(user_id, folder_id=None, is_test=False, custom_data=None):
+def generate_pdf_report(user_id, owner, folder_id=None, is_test=False, custom_data=None):
     """
     Genera un PDF con il riepilogo della comparazione.
     Salva il file in /tmp e ritorna il path.
@@ -365,9 +369,13 @@ def generate_pdf_report(user_id, folder_id=None, is_test=False, custom_data=None
             # --- MODALITÀ TEST OLD (Fallback) ---
              pass # Rimossa o lasciamo vuota se usiamo sempre custom_data dal bottone
         
+        if not owner:
+            print("PDF Gen: Nessun proprietario specificato.")
+            return None
+
         else:
             # --- MODALITÀ NORMALE ---
-            query = supabase.table("products").select("*")
+            query = supabase.table("products").select("*").eq("owner_username", owner)
             if folder_id:
                 query = query.eq("folder_id", folder_id)
             else:
@@ -580,7 +588,7 @@ def check_and_send_scheduled_reports(user_id, user_email):
     """
     try:
         # Recupera preferenze utente
-        user_data = supabase.table("users").select("report_frequency, last_report_sent").eq("id", user_id).single().execute().data
+        user_data = supabase.table("users").select("username, report_frequency, last_report_sent").eq("id", user_id).single().execute().data
         if not user_data: return
         
         freq = user_data.get('report_frequency', 'Mai')
@@ -605,7 +613,12 @@ def check_and_send_scheduled_reports(user_id, user_email):
                     should_send = True
                     
         if should_send:
-            pdf_path = generate_pdf_report(user_id)
+            # Fetch username for report generation
+            u_name = user_data.get('username') # user_data query below needs update to fetch username
+            # Note: The query at line 587 selects "report_frequency, last_report_sent". We need username too.
+            # Let's fix the query first. See replacement below.
+            
+            pdf_path = generate_pdf_report(user_id, owner=u_name)
             if pdf_path:
                 success, msg = send_email_report(user_email, pdf_path)
                 if success:
@@ -690,7 +703,7 @@ with tab1:
             
             if st.form_submit_button("Salva Destinatario"):
                 if r_client and r_email:
-                    success, msg = add_report_recipient(r_client, r_email, r_freq, r_website)
+                    success, msg = add_report_recipient(r_client, r_email, r_freq, r_website, st.session_state['user'])
                     if success:
                         st.success("Destinatario aggiunto!")
                         get_report_recipients.clear()
@@ -702,7 +715,7 @@ with tab1:
 
         st.divider()
         st.subheader("Lista Destinatari")
-        recipients = get_report_recipients()
+        recipients = get_report_recipients(st.session_state['user'])
         
         if recipients:
             df_recip = pd.DataFrame(recipients)
@@ -737,7 +750,7 @@ with tab1:
                     # 2. UPDATE
                     for idx, updates in changes["edited_rows"].items():
                         rid = df_recip.iloc[int(idx)]["id"]
-                        supabase.table("report_recipients").update(updates).eq("id", rid).execute()
+                        supabase.table("report_recipients").update(updates).eq("id", rid).eq("owner_username", st.session_state['user']).execute()
                         st.toast(f"Aggiornato ID: {rid}", icon="✅")
                     
                     if changes["deleted_rows"] or changes["edited_rows"]:
@@ -755,7 +768,7 @@ with tab1:
         st.subheader("Lista Competitor")
         st.info("Aggiungi, Modifica o Elimina i competitor direttamente dalla tabella.")
         
-        competitors = get_competitors()
+        competitors = get_competitors(st.session_state['user'])
         if competitors:
             df_comp = pd.DataFrame(competitors)
         else:
@@ -788,7 +801,8 @@ with tab1:
                         supabase.table("competitors").insert({
                             "nome": row.get("nome"),
                             "url": row.get("url", ""),
-                            "note": row.get("note", "")
+                            "note": row.get("note", ""),
+                            "owner_username": st.session_state['user']
                         }).execute()
                 
                 # 2. DELETED ROWS
@@ -804,7 +818,7 @@ with tab1:
                 for idx, updates in changes["edited_rows"].items():
                     # Recupera ID
                     comp_id = df_comp.iloc[int(idx)]["id"]
-                    supabase.table("competitors").update(updates).eq("id", comp_id).execute()
+                    supabase.table("competitors").update(updates).eq("id", comp_id).eq("owner_username", st.session_state['user']).execute()
                 
                 st.success("Modifiche salvate con successo!")
                 get_competitors.clear()
@@ -859,7 +873,7 @@ with tab2:
                                         status_text.text(f"Elaborazione: {sub_name}...")
                                         
                                         # 1. Crea Cartella
-                                        success, msg = create_folder(full_folder_name, sub_url)
+                                        success, msg = create_folder(full_folder_name, sub_url, st.session_state['user'])
                                         if success:
                                             # Recupera ID appena creato (o esistente)
                                             # create_folder non ritorna ID, quindi lo recuperiamo
@@ -868,7 +882,7 @@ with tab2:
                                                 fid = f_resp.data[0]['id']
                                                 
                                                 # 2. Scrape Prodotti
-                                                count = scrape_category(sub_url, fid)
+                                                count = scrape_category(sub_url, fid, st.session_state['user'])
                                                 st.toast(f"✅ {sub_name}: Creati {count} prodotti", icon="📦")
                                             
                                         progress_bar.progress((i + 1) / len(subs))
@@ -896,7 +910,7 @@ with tab2:
                 
                 if st.form_submit_button("Crea"):
                     if new_folder_name:
-                        success, msg = create_folder(new_folder_name, new_folder_url)
+                        success, msg = create_folder(new_folder_name, new_folder_url, st.session_state['user'])
                         if success:
                             st.success("Creata!")
                             get_folders.clear()
@@ -908,7 +922,7 @@ with tab2:
                         st.warning("Nome obbligatorio")
         
         # 2. LISTA CARTELLE (Selezione Gerarchica)
-        folders = get_folders()
+        folders = get_folders(st.session_state['user'])
         selected_folder_id = None
         selected_folder = None
         
@@ -973,7 +987,7 @@ with tab2:
                                 supabase.table("folders").update({
                                     "name": new_name,
                                     "source_url": new_url
-                                }).eq("id", selected_folder_id).execute()
+                                }).eq("id", selected_folder_id).eq("owner_username", st.session_state['user']).execute()
                                 st.success("Modifiche salvate!")
                                 get_folders.clear()
                                 time.sleep(1)
@@ -1010,8 +1024,8 @@ with tab2:
                             # Importa qui per evitare problemi circolari se scraper usa app
                             from scraper import scrape_category
                             
-                            # Chiama scraper passando folder_id
-                            count = scrape_category(target_url, selected_folder_id)
+                            # Chiama scraper passando folder_id e owner_username
+                            count = scrape_category(target_url, selected_folder_id, st.session_state['user'])
                             
                             if count > 0:
                                 st.success(f"Trovati {count} nuovi prodotti!")
@@ -1032,7 +1046,7 @@ with tab2:
                         with st.spinner("Analisi prodotto..."):
                             try:
                                 from scraper import scrape_single_product_insert
-                                success, msg = scrape_single_product_insert(single_url, selected_folder_id)
+                                success, msg = scrape_single_product_insert(single_url, selected_folder_id, st.session_state['user'])
                                 if success:
                                     st.success("Prodotto aggiunto!")
                                     time.sleep(1)
@@ -1045,7 +1059,7 @@ with tab2:
             st.divider()
             
             # TABELLA PRODOTTI DELLA CARTELLA
-            folder_products = get_products_by_folder(selected_folder_id)
+            folder_products = get_products_by_folder(selected_folder_id, st.session_state['user'])
             
             if folder_products:
                 st.caption("💡 **Tip**: Per eliminare un prodotto, seleziona la riga (clicca a sinistra) e premi `Canc` (o usa l'icona cestino se visibile). Ricorda di salvare.")
@@ -1097,7 +1111,7 @@ with tab2:
                         if 'id' in row and pd.notna(row['id']):
                             pid = row['id']
                             tracked = row['is_tracked']
-                            supabase.table("products").update({"is_tracked": tracked}).eq("id", pid).execute()
+                            supabase.table("products").update({"is_tracked": tracked}).eq("id", pid).eq("owner_username", st.session_state['user']).execute()
                             updated += 1
                     
                     if deleted_count > 0:
@@ -1118,7 +1132,7 @@ def render_hierarchical_sidebar(key_suffix):
     Renderizza la selezione gerarchica (Gruppo > Sottocartella).
     Ritorna (selected_folder_id, selected_folder_obj, selected_group)
     """
-    folders_response = supabase.table("folders").select("*").execute()
+    folders_response = supabase.table("folders").select("*").eq("owner_username", st.session_state['user']).execute()
     folders = folders_response.data
     
     if not folders:
@@ -1174,7 +1188,7 @@ with tab3:
     # HELPER: Gestione Database Link
     def get_competitor_links(product_id):
         try:
-            response = supabase.table("competitor_links").select("*").eq("product_id", product_id).execute()
+            response = supabase.table("competitor_links").select("*").eq("product_id", product_id).eq("owner_username", st.session_state['user']).execute()
             return response.data
         except Exception as e:
             st.error(f"Errore recupero link: {e}")
@@ -1185,7 +1199,8 @@ with tab3:
             supabase.table("competitor_links").insert({
                 "product_id": product_id,
                 "competitor_name": comp_name,
-                "competitor_url": comp_url
+                "competitor_url": comp_url,
+                "owner_username": st.session_state['user']
             }).execute()
             return True
         except Exception as e:
@@ -1205,7 +1220,7 @@ with tab3:
                 try:
                     # Delete folders (Cascade should handle products if configured, otherwise we might leave orphans if no cascade)
                     # User requested this specific logic:
-                    supabase.table('folders').delete().ilike('name', f"{selected_group}%").execute()
+                    supabase.table('folders').delete().ilike('name', f"{selected_group}%").eq("owner_username", st.session_state['user']).execute()
                     
                     # Optional: Delete products manually if cascade isn't on?
                     # The user's code didn't include product deletion, assuming cascade or just folder deletion is enough.
@@ -1291,7 +1306,7 @@ with tab3:
                     
                     # 1. PREPARAZIONE DATI COMPETITOR
                     # Recupera lista competitor dal DB (cache)
-                    competitors_list = get_competitors()
+                    competitors_list = get_competitors(st.session_state['user'])
                     if not competitors_list:
                         st.warning("Nessun competitor configurato. Vai in 'Impostazioni' per aggiungerne uno.")
                     else:
@@ -1336,7 +1351,7 @@ with tab3:
                     # E. ELIMINAZIONE PRODOTTO (Singolo)
                     if st.button("🗑️ Elimina Prodotto definitivamente", key=f"del_prod_t3_{product_id}"):
                         try:
-                            supabase.table("products").delete().eq("id", product_id).execute()
+                            supabase.table("products").delete().eq("id", product_id).eq("owner_username", st.session_state['user']).execute()
                             st.success("Prodotto eliminato!")
                             time.sleep(0.5)
                             st.rerun()
@@ -1358,7 +1373,7 @@ with tab4:
         # 2. RECUPERO DATI (Join Products + Links) - FILTRATO
         try:
             # Fetch Products (Filtrati per Cartella)
-            products_resp = supabase.table("products").select("id, descrizione, prezzo, codice").eq("is_tracked", True).eq("folder_id", selected_folder_id_t4).execute()
+            products_resp = supabase.table("products").select("id, descrizione, prezzo, codice").eq("is_tracked", True).eq("folder_id", selected_folder_id_t4).eq("owner_username", st.session_state['user']).execute()
             products_data = products_resp.data
             
             if not products_data:
@@ -1366,7 +1381,7 @@ with tab4:
             else:
                 # ... (Resto della logica invariato, usa products_data filtrato)
                 product_ids = [p['id'] for p in products_data]
-                links_resp = supabase.table("competitor_links").select("*").in_("product_id", product_ids).execute()
+                links_resp = supabase.table("competitor_links").select("*").in_("product_id", product_ids).eq("owner_username", st.session_state['user']).execute()
                 links_data = links_resp.data
                 
                 # Creazione DataFrame Comparazione (1 Riga per LINK)
@@ -1506,7 +1521,7 @@ with tab4:
                                     pid = subset.iloc[0]["id"]
                                     if st.button("🗑️ Elimina", key=f"del_comp_{pid}", type="primary", help="Cancella questo prodotto e tutti i link associati"):
                                         try:
-                                            supabase.table("products").delete().eq("id", int(pid)).execute()
+                                            supabase.table("products").delete().eq("id", int(pid)).eq("owner_username", st.session_state['user']).execute()
                                             st.toast("Prodotto eliminato!", icon="🗑️")
                                             time.sleep(1)
                                             st.rerun()
@@ -1594,7 +1609,7 @@ with tab5:
     st.info("Configura la frequenza con cui ricevere il report PDF via email.")
     
     # Selettore Destinatario (Da tabella report_recipients)
-    recipients = get_report_recipients()
+    recipients = get_report_recipients(st.session_state['user'])
     
     if not recipients:
         st.warning("Nessun destinatario trovato. Creane uno in 'Gestione Destinatari Report' (Tab 1).")
@@ -1629,10 +1644,10 @@ with tab5:
                 with st.spinner("Generazione e invio report di prova (Modalità URL Parsing)..."):
                     try:
                         # 1. FETCH DATI (Solo Link e Prodotti)
-                        links_resp = supabase.table('competitor_links').select("product_id, competitor_url, last_price").execute()
+                        links_resp = supabase.table('competitor_links').select("product_id, competitor_url, last_price").eq("owner_username", st.session_state['user']).execute()
                         links_data = links_resp.data
                         
-                        prods_resp = supabase.table('products').select("id, descrizione, prezzo").execute()
+                        prods_resp = supabase.table('products').select("id, descrizione, prezzo").eq("owner_username", st.session_state['user']).execute()
                         prods_data = prods_resp.data
                         
                         
@@ -1687,7 +1702,7 @@ with tab5:
                             
                             # PDF
                             # Usiamo ID 0 o ID destinatario per compatibilità
-                            pdf = generate_pdf_report(recipient_id, custom_data=cleaned_data)
+                            pdf = generate_pdf_report(recipient_id, owner=st.session_state['user'], custom_data=cleaned_data)
                             
                             if pdf:
                                 st.success(f"PDF Generato: {pdf}")
