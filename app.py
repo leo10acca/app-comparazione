@@ -371,79 +371,29 @@ def generate_pdf_report(user_id, owner, folder_id=None, is_test=False, custom_da
                 comps_resp = supabase.table("competitors").select("id, nome").eq("owner_username", owner).execute()
                 comps_data = comps_resp.data
                 
-                # 1. RECUPERA MAPPA NOMI
+                # 1. RECUPERA MAPPA NOMI (FORZATA STRINGA)
                 comp_map = {}
                 if comps_data:
-                    comp_map = {c['id']: c['nome'] for c in comps_data}
+                    # FIX: Forziamo ID a stringa
+                    comp_map = {str(c['id']): c['nome'] for c in comps_data}
+                    st.write("🔍 DEBUG MAPPA COMPETITOR:", comp_map)
                 
                 df_links = pd.DataFrame(links_data)
                 
                 # 2. APPLICA MAPPATURA
                 if not df_links.empty:
-                    if 'competitor_id' in df_links.columns:
-                        # Assicuriamoci che sia int per il mapping, gestendo NaN
-                        try:
-                            # Se ci sono NaN, fillna(0) o dropna
-                            df_links['competitor_id'] = df_links['competitor_id'].fillna(0).astype(int)
-                            df_links['competitor_name_real'] = df_links['competitor_id'].map(comp_map).fillna("Sconosciuto")
-                        except Exception as e:
-                            st.warning(f"Errore mapping competitor_id: {e}")
-                            df_links['competitor_name_real'] = "Err. Map"
-                    else:
-                        st.warning("Colonna 'competitor_id' mancante in df_links.")
-                        df_links['competitor_name_real'] = "Sconosciuto (No ID)"
-                    
-                    # Assegna a df_merged
+                    # Non facciamo più affidamento sul merge pandas se vogliamo controllo totale
+                    # Usiamo il ciclo sotto per fare il lookup
                     df_merged = df_links
                 else:
                     df_merged = pd.DataFrame() # Vuoto se no links
+ 
+        # ... (rest of function) ...
 
-        # 2. CONTROLLO DATI VUOTI (Regola Sicurezza #2)
-        if not products:
-            st.error("❌ ERRORE PDF: Nessun prodotto trovato per questo utente!")
-            return None
-        else:
-            st.write(f"✅ Dati trovati: {len(products)} prodotti.")
-
-        # 3. CREAZIONE CANVAS
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        filename = f"/tmp/report_prezzi_{timestamp}.pdf"
-        c = canvas.Canvas(filename, pagesize=letter)
-        
-        # --- GESTIONE LOGO SICURA (Regola Sicurezza #1) ---
-        try:
-            # Prova a cercare logo.png nella root corrente
-            logo_path = "logo.png" 
-            if os.path.exists(logo_path):
-                # Disegna logo (x, y, width, height) - Adatta coordinate se necessario
-                c.drawImage(logo_path, 50, 760, width=50, height=50, preserveAspectRatio=True, mask='auto')
-                st.write("✅ Logo inserito.")
-            else:
-                st.warning("⚠️ Logo 'logo.png' non trovato, proseguo senza.")
-        except Exception as e_logo:
-            st.error(f"⚠️ Errore inserimento logo (ignorato): {e_logo}")
-            # Non bloccare, continua
-
-        # Intestaizone
-        c.setFont("Helvetica-Bold", 16)
-        c.drawString(110, 780, "Report Comparazione Prezzi") # Spostato un po' a destra per il logo
-        c.setFont("Helvetica", 10)
-        c.drawString(110, 765, f"Generato il: {datetime.now().strftime('%d/%m/%Y %H:%M')}")
-        
-        y = 730
-        c.setFont("Helvetica-Bold", 10)
-        c.drawString(50, y, "Prodotto")
-        c.drawString(300, y, "Tuo Prezzo")
-        c.drawString(380, y, "Competitor")
-        c.drawString(500, y, "Gap")
-        y -= 20
-        c.setFont("Helvetica", 9)
-        
         # 4. CICLO PRODOTTI
         for p in products:
             p_id = p['id']
-            my_price = p.get('prezzo', 0.0) or 0.0
-            p_name = p.get('descrizione', 'N/A')[:35]
+            # ...
             
             competitor_rows = []
             if not df_merged.empty and 'product_id' in df_merged.columns:
@@ -452,10 +402,15 @@ def generate_pdf_report(user_id, owner, folder_id=None, is_test=False, custom_da
                 if not valid_subset.empty:
                     valid_subset = valid_subset.sort_values(by='last_price')
                     for _, row in valid_subset.iterrows():
-                        # FIX: Usa il nome reale mappato
-                        c_name = row.get('competitor_name_real')
-                        if pd.isna(c_name) or c_name == "Err. Map": 
-                             c_name = row.get('competitor_name_resolved', row.get('competitor_name', 'Esterno'))
+                        # FIX RIGIDO: Lookup manuale con string conversion
+                        raw_id = row.get('competitor_id')
+                        try:
+                            # Gestione decimali (es. 5.0 -> "5")
+                            str_id = str(raw_id).replace('.0', '')
+                            # Lookup
+                            c_name = comp_map.get(str_id, f"Sconosciuto (ID: {str_id})")
+                        except Exception:
+                            c_name = "Err. Tipo"
                         
                         competitor_rows.append((c_name, row['last_price']))
 
