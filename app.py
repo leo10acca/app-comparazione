@@ -374,10 +374,17 @@ def generate_pdf_report(user_id, owner, folder_id=None, is_test=False, custom_da
                 df_comps = pd.DataFrame(comps_data)
                 
                 if not df_links.empty and not df_comps.empty:
-                    df_links['competitor_id'] = df_links['competitor_id'].astype(int)
-                    df_comps['id'] = df_comps['id'].astype(int)
-                    df_merged = pd.merge(df_links, df_comps, left_on='competitor_id', right_on='id', how='left')
-                    df_merged = df_merged.rename(columns={'nome': 'competitor_name_resolved'})
+                    # FIX: Controllo preventivo esistenza colonna (Richiesta Utente)
+                    if 'competitor_id' in df_links.columns:
+                        df_links['competitor_id'] = df_links['competitor_id'].astype(int)
+                        df_comps['id'] = df_comps['id'].astype(int)
+                        df_merged = pd.merge(df_links, df_comps, left_on='competitor_id', right_on='id', how='left')
+                        df_merged = df_merged.rename(columns={'nome': 'competitor_name_resolved'})
+                    else:
+                        st.warning(f"⚠️ Attenzione: colonna 'competitor_id' mancante. Colonne trovate: {list(df_links.columns)}")
+                        # Proseguo senza merge (usando solo i dati links)
+                        df_merged = df_links
+                        df_merged['competitor_name_resolved'] = "Sconosciuto (No ID)"
                 else:
                     df_merged = df_links
                     if 'competitor_name' not in df_merged.columns: df_merged['competitor_name_resolved'] = "Sconosciuto"
