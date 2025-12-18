@@ -365,36 +365,25 @@ def generate_pdf_report(user_id, owner, folder_id=None, is_test=False, custom_da
             
             if products:
                 p_ids = [p['id'] for p in products]
-                # FIX QUERY: Richiedi esplicitamente competitor_id
-                links_resp = supabase.table("competitor_links").select("id, product_id, competitor_id, competitor_url, last_price").in_("product_id", p_ids).execute()
+                # FIX QUERY: Rimuoviamo competitor_id che non esiste. Usiamo competitor_url.
+                links_resp = supabase.table("competitor_links").select("id, product_id, competitor_url, last_price").in_("product_id", p_ids).execute()
                 links_data = links_resp.data
                 
-                # Fetch Competitor (Explicit Request: Map Names manually)
-                comps_resp = supabase.table("competitors").select("id, nome").eq("owner_username", owner).execute()
+                # Fetch Competitor (URL Matching Strategy)
+                comps_resp = supabase.table("competitors").select("nome, url").eq("owner_username", owner).execute()
                 comps_data = comps_resp.data
                 
-                # 1. RECUPERA MAPPA NOMI (FORZATA STRINGA)
-                comp_map = {}
-                if comps_data:
-                    # FIX: Forziamo ID a stringa
-                    comp_map = {str(c['id']): c['nome'] for c in comps_data}
-                    st.write("🔍 DEBUG MAPPA COMPETITOR:", comp_map)
+                # Non serve più la mappa ID->Nome. Useremo URL matching nel ciclo.
+                st.write("🔍 DEBUG Dati Competitor (per Url Matching):", len(comps_data) if comps_data else 0)
                 
                 df_links = pd.DataFrame(links_data)
                 
                 # FIX DEBUG: Stampa colonne trovate
                 if not df_links.empty:
                     st.write("🔍 DEBUG DF LINKS (COLONNE):", df_links.columns.tolist())
-                    st.write("🔍 DEBUG DF LINKS (HEAD):", df_links.head(2))
                 
-                # 2. APPLICA MAPPATURA
-                if not df_links.empty:
-                    # Non facciamo più affidamento sul merge pandas se vogliamo controllo totale
-                    # Usiamo il ciclo sotto per fare il lookup
-                    df_merged = df_links
-                else:
-                    df_merged = pd.DataFrame() # Vuoto se no links
- 
+                df_merged = df_links
+                
         # 2. CONTROLLO DATI VUOTI (Regola Sicurezza #2)
         if not products:
             st.error("❌ ERRORE PDF: Nessun prodotto trovato per questo utente!")
@@ -402,27 +391,23 @@ def generate_pdf_report(user_id, owner, folder_id=None, is_test=False, custom_da
         else:
             st.write(f"✅ Dati trovati: {len(products)} prodotti.")
 
+        # ... (Canvas Init remains the same) ...
         # 3. CREAZIONE CANVAS
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         filename = f"/tmp/report_prezzi_{timestamp}.pdf"
         c = canvas.Canvas(filename, pagesize=letter)
         
-        # --- GESTIONE LOGO SICURA (Regola Sicurezza #1) ---
+        # --- GESTIONE LOGO SICURA ---
         try:
-            # Prova a cercare logo.png nella root corrente
             logo_path = "logo.png" 
             if os.path.exists(logo_path):
-                # Disegna logo (x, y, width, height) - Adatta coordinate se necessario
                 c.drawImage(logo_path, 50, 760, width=50, height=50, preserveAspectRatio=True, mask='auto')
                 st.write("✅ Logo inserito.")
-                # Spostiamo un po' i margini se c'è il logo
                 header_x = 110
             else:
-                st.warning("⚠️ Logo 'logo.png' non trovato, proseguo senza.")
                 header_x = 50
-        except Exception as e_logo:
-            st.error(f"⚠️ Errore inserimento logo (ignorato): {e_logo}")
-            header_x = 50 # Fallback
+        except Exception:
+            header_x = 50
 
         # Intestazione
         c.setFont("Helvetica-Bold", 16)
@@ -430,7 +415,7 @@ def generate_pdf_report(user_id, owner, folder_id=None, is_test=False, custom_da
         c.setFont("Helvetica", 10)
         c.drawString(header_x, 765, f"Generato il: {datetime.now().strftime('%d/%m/%Y %H:%M')}")
         
-        y = 730 # INIZIALIZZAZIONE Y (Fondamentale)
+        y = 730
         c.setFont("Helvetica-Bold", 10)
         c.drawString(50, y, "Prodotto")
         c.drawString(300, y, "Tuo Prezzo")
@@ -452,16 +437,29 @@ def generate_pdf_report(user_id, owner, folder_id=None, is_test=False, custom_da
                 if not valid_subset.empty:
                     valid_subset = valid_subset.sort_values(by='last_price')
                     for _, row in valid_subset.iterrows():
-                        # FIX RIGIDO: Lookup manuale con string conversion
-                        raw_id = row.get('competitor_id')
-                        try:
-                            # Gestione decimali (es. 5.0 -> "5")
-                            str_id = str(raw_id).replace('.0', '')
-                            # Lookup
-                            c_name = comp_map.get(str_id, f"Sconosciuto (ID: {str_id})")
-                        except Exception:
-                            c_name = "Err. Tipo"
+                        # LOGICA URL MATCHING
+                        link_url = row.get('competitor_url', '')
+                        c_name = "Sconosciuto"
                         
+                        # Cerca corrispondenza URL
+                        if comps_data:
+                            for comp in comps_data:
+                                # Logica: Se il dominio del competitor è nel link del prodotto
+                                # Es. comp['url']="irrigarden.it" in link="...irrigarden.it/..."
+                                c_url_clean = comp.get('url', '').replace('https://', '').replace('http://', '').replace('www.', '').strip('/')
+                                if c_url_clean and c_url_clean in link_url:
+                                    c_name = comp.get('nome', 'N/A')
+                                    break
+                        
+                        # Fallback se ancora sconosciuto ma abbiamo URL
+                        if c_name == "Sconosciuto" and link_url:
+                             # Estrai dominio
+                             try:
+                                 from urllib.parse import urlparse
+                                 domain = urlparse(link_url).netloc.replace('www.', '')
+                                 if domain: c_name = domain.capitalize()
+                             except: pass
+
                         competitor_rows.append((c_name, row['last_price']))
 
             # Rendering Righe
