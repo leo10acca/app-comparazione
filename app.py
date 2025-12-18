@@ -365,8 +365,10 @@ def generate_pdf_report(user_id, owner, folder_id=None, is_test=False, custom_da
             
             if products:
                 p_ids = [p['id'] for p in products]
-                links_resp = supabase.table("competitor_links").select("*").in_("product_id", p_ids).execute()
+                # FIX QUERY: Richiedi esplicitamente competitor_id
+                links_resp = supabase.table("competitor_links").select("id, product_id, competitor_id, competitor_url, last_price").in_("product_id", p_ids).execute()
                 links_data = links_resp.data
+                
                 # Fetch Competitor (Explicit Request: Map Names manually)
                 comps_resp = supabase.table("competitors").select("id, nome").eq("owner_username", owner).execute()
                 comps_data = comps_resp.data
@@ -379,6 +381,11 @@ def generate_pdf_report(user_id, owner, folder_id=None, is_test=False, custom_da
                     st.write("🔍 DEBUG MAPPA COMPETITOR:", comp_map)
                 
                 df_links = pd.DataFrame(links_data)
+                
+                # FIX DEBUG: Stampa colonne trovate
+                if not df_links.empty:
+                    st.write("🔍 DEBUG DF LINKS (COLONNE):", df_links.columns.tolist())
+                    st.write("🔍 DEBUG DF LINKS (HEAD):", df_links.head(2))
                 
                 # 2. APPLICA MAPPATURA
                 if not df_links.empty:
