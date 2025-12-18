@@ -373,14 +373,15 @@ def generate_pdf_report(user_id, owner, folder_id=None, is_test=False, custom_da
                 comps_resp = supabase.table("competitors").select("nome, url").eq("owner_username", owner).execute()
                 comps_data = comps_resp.data
                 
+                
                 # Non serve più la mappa ID->Nome. Useremo URL matching nel ciclo.
-                st.write("🔍 DEBUG Dati Competitor (per Url Matching):", len(comps_data) if comps_data else 0)
+                # st.write("🔍 DEBUG Dati Competitor (per Url Matching):", len(comps_data) if comps_data else 0)
                 
                 df_links = pd.DataFrame(links_data)
                 
                 # FIX DEBUG: Stampa colonne trovate
-                if not df_links.empty:
-                    st.write("🔍 DEBUG DF LINKS (COLONNE):", df_links.columns.tolist())
+                # if not df_links.empty:
+                #    st.write("🔍 DEBUG DF LINKS (COLONNE):", df_links.columns.tolist())
                 
                 df_merged = df_links
                 
@@ -389,7 +390,8 @@ def generate_pdf_report(user_id, owner, folder_id=None, is_test=False, custom_da
             st.error("❌ ERRORE PDF: Nessun prodotto trovato per questo utente!")
             return None
         else:
-            st.write(f"✅ Dati trovati: {len(products)} prodotti.")
+            # st.write(f"✅ Dati trovati: {len(products)} prodotti.")
+            pass
 
         # ... (Canvas Init remains the same) ...
         # 3. CREAZIONE CANVAS
@@ -401,8 +403,9 @@ def generate_pdf_report(user_id, owner, folder_id=None, is_test=False, custom_da
         try:
             logo_path = "logo.png" 
             if os.path.exists(logo_path):
+                # Disegna logo (x, y, width, height) - Adatta coordinate se necessario
                 c.drawImage(logo_path, 50, 760, width=50, height=50, preserveAspectRatio=True, mask='auto')
-                st.write("✅ Logo inserito.")
+                # st.write("✅ Logo inserito.")
                 header_x = 110
             else:
                 header_x = 50
@@ -506,7 +509,7 @@ def generate_pdf_report(user_id, owner, folder_id=None, is_test=False, custom_da
             y -= 5
 
         c.save()
-        st.write(f"✅ PDF salvato correttamente: {filename}")
+        # st.write(f"✅ PDF salvato correttamente: {filename}")
         return filename
 
     except Exception as e:
@@ -1633,46 +1636,13 @@ with tab5:
             
             st.divider()
             
-            # AREA TEST DIAGNOSTICA
-            st.markdown("### 🛠️ Area Test")
-            st.info("Usa questa sezione per verificare se le email partono correttamente.")
+            # CLEANUP: Rimosso "Area Tecnica" debug come richiesto
+            st.divider()
             
-            st.markdown("---")
-            st.subheader("🔧 Area Tecnica")
+            # AREA INVIO MANUALE (PULITA)
+            st.markdown("### 📨 Invio Manuale")
+            st.info("Invia una email di prova al destinatario selezionato.")
 
-            if st.button("TEST CONNESSIONE EMAIL (Debug SMTP)"):
-                import smtplib
-                try:
-                    # 1. Recupero credenziali
-                    email_conf = st.secrets.get("email")
-                    if not email_conf:
-                        st.error("ERRORE CRITICO: La sezione [email] non esiste nei secrets!")
-                        st.stop()
-                        
-                    smtp_server = email_conf.get("smtp_server", "smtp.gmail.com")
-                    smtp_port = email_conf.get("smtp_port", 587)
-                    email_address = email_conf.get("address")
-                    email_password = email_conf.get("password")
-                    
-                    st.info(f"Tentativo connessione a: {smtp_server}:{smtp_port} con utente: {email_address}")
-                    
-                    # 2. Connessione al Server
-                    server = smtplib.SMTP(smtp_server, smtp_port)
-                    st.write("✅ Connessione al server SMTP riuscita.")
-                    
-                    # 3. Avvio TLS
-                    server.starttls()
-                    st.write("✅ Canale sicuro (TLS) attivato.")
-                    
-                    # 4. Login
-                    server.login(email_address, email_password)
-                    st.success("🎉 LOGIN RIUSCITO! Password accettata. Il problema non sono le credenziali.")
-                    server.quit()
-                    
-                except Exception as e:
-                    st.error(f"❌ FALLITO: {e}")
-                    st.write("Se l'errore è 'Username and Password not accepted', verifica l'App Password.")
-            
             if st.button("📨 Invia Email di Prova ADESSO"):
                 import smtplib
                 # Nomi import per sicurezza, anche se già importati globalmente
@@ -1700,56 +1670,46 @@ with tab5:
                 selected_recipient_name = current_recipient.get('client_name')
                 selected_recipient_email = current_recipient.get('target_email')
                     
-                st.info(f"Avvio procedura per: {selected_recipient_name}...")
-
-                try:
-                    # 3. Generazione PDF (REALE - Usiamo la funzione esistente)
-                    st.write("📄 Generazione PDF in corso...")
-                    # Chiamiamo la funzione standard (senza custom_data)
-                    # Per essere sicuri che includa dati, passiamo l'owner corrente
-                    pdf_path = generate_pdf_report(recipient_id, owner=st.session_state['user'])
-                    
-                    if not pdf_path or not os.path.exists(pdf_path):
-                        st.error("Errore: Il PDF non è stato generato (cerca di capire perché dai log sopra).")
-                        st.stop()
-
-                    # Leggi i bytes del PDF per MIMEApplication
-                    with open(pdf_path, "rb") as f:
-                        pdf_bytes = f.read()
-                        
-                    st.write(f"✅ PDF Generato: {os.path.basename(pdf_path)}")
-
-                    # 4. Composizione Email
-                    msg = MIMEMultipart()
-                    msg['From'] = email_address
-                    msg['To'] = selected_recipient_email 
-                    msg['Subject'] = f"Report Prezzi - {selected_recipient_name}"
-                    
-                    body = "In allegato il report aggiornato dei prezzi."
-                    msg.attach(MIMEText(body, 'plain'))
-                    
-                    # Allegato
-                    part = MIMEApplication(pdf_bytes, Name=f"Report_{selected_recipient_name}.pdf")
-                    part['Content-Disposition'] = f'attachment; filename="Report_{selected_recipient_name}.pdf"'
-                    msg.attach(part)
-
-                    # 5. Invio Effettivo
-                    st.write(f"📤 Connessione a {smtp_server}...")
+                # UI PULITA: Spinner invece dei messaggi technici
+                with st.spinner(f"Generazione report e invio a {selected_recipient_email} in corso..."):
                     try:
-                        server = smtplib.SMTP(smtp_server, smtp_port)
-                        server.starttls()
-                        server.login(email_address, email_password)
-                        server.send_message(msg)
-                        server.quit()
+                        # 3. Generazione PDF (SILENZIOSA - Log Rimossi)
+                        # Chiamiamo la funzione standard (senza custom_data)
+                        pdf_path = generate_pdf_report(recipient_id, owner=st.session_state['user'])
                         
-                        st.success(f"🚀 EMAIL INVIATA con successo a {selected_recipient_email}!")
+                        if not pdf_path or not os.path.exists(pdf_path):
+                            st.error("Errore: Il PDF non è stato generato.")
+                            st.stop()
+
+                        # Leggi i bytes del PDF per MIMEApplication
+                        with open(pdf_path, "rb") as f:
+                            pdf_bytes = f.read()
+                            
+                        # 4. Composizione Email
+                        msg = MIMEMultipart()
+                        msg['From'] = email_address
+                        msg['To'] = selected_recipient_email 
+                        msg['Subject'] = f"Report Prezzi - {selected_recipient_name}"
+                        
+                        body = "In allegato il report aggiornato dei prezzi."
+                        msg.attach(MIMEText(body, 'plain'))
+                        
+                        # Allegato
+                        part = MIMEApplication(pdf_bytes, Name=f"Report_{selected_recipient_name}.pdf")
+                        part['Content-Disposition'] = f'attachment; filename="Report_{selected_recipient_name}.pdf"'
+                        msg.attach(part)
+                        
+                        # 5. Invio REALE
+                        with smtplib.SMTP(smtp_server, smtp_port) as server:
+                            server.starttls()
+                            server.login(email_address, email_password)
+                            server.send_message(msg)
+                            
+                        st.success(f"🚀 Email inviata con successo a {selected_recipient_email}!")
                         st.balloons()
-                    except Exception as smtp_e:
-                        st.error(f"❌ Errore SMTP: {smtp_e}")
                         
-                except Exception as e:
-                    st.error(f"❌ Errore Generico: {e}")
-                    st.write("Dettaglio errore:", e)
+                    except Exception as e:
+                        st.error(f"❌ ERRORE: {e}")
 
 
 
