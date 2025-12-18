@@ -324,76 +324,52 @@ def clean_search_query(description):
 
 def generate_pdf_report(user_id, owner, folder_id=None, is_test=False, custom_data=None):
     """
-    Genera un PDF con il riepilogo della comparazione.
+    Genera un PDF con il riepilogo della comparazione (Versione Robusta).
     Salva il file in /tmp e ritorna il path.
-    custom_data: Lista di dict pre-processati [{'product_name', 'user_price', 'competitor_name', 'competitor_price'}]
     """
+    # --- DEBUG START ---
+    st.write("--- INIZIO GENERAZIONE PDF (Robust Mode) ---")
+    # --- DEBUG END ---
+
     try:
-        # 1. FETCH DATI (Ottimizzato & Modalità Test)
+        # 1. FETCH DATI
         products = []
-        df_merged = pd.DataFrame() # Inizializza vuoto
+        df_merged = pd.DataFrame()
         
         if custom_data:
-            # --- MODALITÀ CUSTOM DATA (Test) ---
-            # Trasformiamo i dati piatti in prodotti + df_merged per riutilizzare la logica sotto
-            print(f"DEBUG PDF: Utilizzo {len(custom_data)} righe custom")
-            
-            # Simuliamo i prodotti (univoci per nome)
-            # Usiamo un ID fittizio progressivo
-            prod_map = {} # name -> id
+            st.write(f"DEBUG PDF: Utilizzo {len(custom_data)} righe custom (Test Mode)")
+            # Logica Dummy per Test
+            prod_map = {}
             p_list = []
             l_list = []
-            
             for i, row in enumerate(custom_data):
                 p_name = row.get('product_name', 'N/A')
                 if p_name not in prod_map:
                     pid = i + 1000
                     prod_map[p_name] = pid
-                    p_list.append({
-                        'id': pid,
-                        'descrizione': p_name,
-                        'prezzo': row.get('user_price', 0.0)
-                    })
-                
+                    p_list.append({'id': pid, 'descrizione': p_name, 'prezzo': row.get('user_price', 0.0)})
                 pid = prod_map[p_name]
-                l_list.append({
-                    'product_id': pid,
-                    'last_price': row.get('competitor_price', 0.0),
-                    'competitor_name_resolved': row.get('competitor_name', 'N/A')
-                })
-            
+                l_list.append({'product_id': pid, 'last_price': row.get('competitor_price', 0.0), 'competitor_name_resolved': row.get('competitor_name', 'N/A')})
             products = p_list
             df_merged = pd.DataFrame(l_list)
             
-        elif is_test:
-            # --- MODALITÀ TEST OLD (Fallback) ---
-             pass # Rimossa o lasciamo vuota se usiamo sempre custom_data dal bottone
-        
-        if not owner:
-            print("PDF Gen: Nessun proprietario specificato.")
+        elif not owner:
+            st.error("ERRORE PDF: Nessun proprietario specificato.")
             return None
-
         else:
-            # --- MODALITÀ NORMALE ---
+            # Fetch Reale
             query = supabase.table("products").select("*").eq("owner_username", owner)
-            if folder_id:
-                query = query.eq("folder_id", folder_id)
-            else:
-                query = query.eq("is_tracked", True)
-                
+            if folder_id: query = query.eq("folder_id", folder_id)
+            else: query = query.eq("is_tracked", True)
             products = query.execute().data
             
-            # Se abbiamo prodotti, recuperiamo i link
             if products:
                 p_ids = [p['id'] for p in products]
                 links_resp = supabase.table("competitor_links").select("*").in_("product_id", p_ids).execute()
                 links_data = links_resp.data
-                
-                # Fetch Competitor
                 comps_resp = supabase.table("competitors").select("id, nome").execute()
                 comps_data = comps_resp.data
                 
-                # Prepare Merge
                 df_links = pd.DataFrame(links_data)
                 df_comps = pd.DataFrame(comps_data)
                 
@@ -404,71 +380,67 @@ def generate_pdf_report(user_id, owner, folder_id=None, is_test=False, custom_da
                     df_merged = df_merged.rename(columns={'nome': 'competitor_name_resolved'})
                 else:
                     df_merged = df_links
-                    if 'competitor_name' not in df_merged.columns:
-                        df_merged['competitor_name_resolved'] = "Sconosciuto"
+                    if 'competitor_name' not in df_merged.columns: df_merged['competitor_name_resolved'] = "Sconosciuto"
 
+        # 2. CONTROLLO DATI VUOTI (Regola Sicurezza #2)
         if not products:
-            print("Nessun prodotto trovato per il report.")
+            st.error("❌ ERRORE PDF: Nessun prodotto trovato per questo utente!")
             return None
+        else:
+            st.write(f"✅ Dati trovati: {len(products)} prodotti.")
 
-        # (Skip logic below creates df_merged normally, handled above)
-
-        if not custom_data:
-             # Logic OLD (Only executing if NOT custom_data because custom_data already prepared df_merged)
-             pass 
-             # Logic moved inside ELSE above to avoid duplication. 
-             # Wait, logic above populates df_merged ONLY for custom_data and normal (via fetch). 
-             # We can remove this block or clean up.
-             
-        # Clean up: ensure df_merged exists if not created (e.g. products found but no links)
-        if df_merged.empty and not products:
-             pass # Already handled return None
-        
-        # 3. PDF GENERATION
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-
-        # 3. PDF GENERATION
+        # 3. CREAZIONE CANVAS
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         filename = f"/tmp/report_prezzi_{timestamp}.pdf"
-        
         c = canvas.Canvas(filename, pagesize=letter)
-        c.setFont("Helvetica-Bold", 16)
-        c.drawString(50, 750, "Report Comparazione Prezzi")
-        c.setFont("Helvetica", 10)
-        c.drawString(50, 735, f"Generato il: {datetime.now().strftime('%d/%m/%Y %H:%M')}")
         
-        y = 700
+        # --- GESTIONE LOGO SICURA (Regola Sicurezza #1) ---
+        try:
+            # Prova a cercare logo.png nella root corrente
+            logo_path = "logo.png" 
+            if os.path.exists(logo_path):
+                # Disegna logo (x, y, width, height) - Adatta coordinate se necessario
+                c.drawImage(logo_path, 50, 760, width=50, height=50, preserveAspectRatio=True, mask='auto')
+                st.write("✅ Logo inserito.")
+            else:
+                st.warning("⚠️ Logo 'logo.png' non trovato, proseguo senza.")
+        except Exception as e_logo:
+            st.error(f"⚠️ Errore inserimento logo (ignorato): {e_logo}")
+            # Non bloccare, continua
+
+        # Intestaizone
+        c.setFont("Helvetica-Bold", 16)
+        c.drawString(110, 780, "Report Comparazione Prezzi") # Spostato un po' a destra per il logo
+        c.setFont("Helvetica", 10)
+        c.drawString(110, 765, f"Generato il: {datetime.now().strftime('%d/%m/%Y %H:%M')}")
+        
+        y = 730
         c.setFont("Helvetica-Bold", 10)
         c.drawString(50, y, "Prodotto")
         c.drawString(300, y, "Tuo Prezzo")
-        c.drawString(380, y, "Competitor") # Aggiornato Header
+        c.drawString(380, y, "Competitor")
         c.drawString(500, y, "Gap")
         y -= 20
         c.setFont("Helvetica", 9)
         
+        # 4. CICLO PRODOTTI
         for p in products:
             p_id = p['id']
             my_price = p.get('prezzo', 0.0) or 0.0
-            p_name = p.get('descrizione', 'N/A')[:35] 
+            p_name = p.get('descrizione', 'N/A')[:35]
             
-            # Filtra link per questo prodotto
             competitor_rows = []
-            
             if not df_merged.empty and 'product_id' in df_merged.columns:
                 subset = df_merged[df_merged['product_id'] == p_id]
                 valid_subset = subset[subset['last_price'] > 0]
-                
-                # Ordina per prezzo crescente
                 if not valid_subset.empty:
                     valid_subset = valid_subset.sort_values(by='last_price')
                     for _, row in valid_subset.iterrows():
                         c_name = row.get('competitor_name_resolved')
                         if pd.isna(c_name): c_name = row.get('competitor_name', 'Esterno')
-                        c_price = row['last_price']
-                        competitor_rows.append((c_name, c_price))
-            
-            # Se non ci sono competitor, mette riga vuota o salta?
-            # Mettiamo almeno una riga con il prezzo utente
+                        competitor_rows.append((c_name, row['last_price']))
+
+            # Rendering Righe
             if not competitor_rows:
                 if y < 50:
                     c.showPage()
@@ -480,51 +452,47 @@ def generate_pdf_report(user_id, owner, folder_id=None, is_test=False, custom_da
                 c.drawString(500, y, "-")
                 y -= 15
             else:
-                # Stampa una riga per OGNI competitor
                 first_line = True
                 for c_name, c_price in competitor_rows:
                     if y < 50:
                         c.showPage()
                         y = 750
                     
-                    # Logica Colore Gap
-                    gap_str = "-"
-                    gap = 0 # Initialize gap
-                    if c_price > 0:
-                        gap = my_price - c_price
-                        gap_perc = (gap / c_price) * 100
-                        gap_str = f"{gap_perc:.1f}%"
-                        
-                        if gap > 0: c.setFillColorRGB(1, 0, 0) # Rosso (Perdiamo)
-                        else: c.setFillColorRGB(0, 0.5, 0) # Verde (Vinciamo)
-                    else:
-                        c.setFillColorRGB(0, 0, 0)
-
-                    # Stampa Nome Prodotto solo alla prima riga (raggruppamento visivo)
+                    gap = my_price - c_price
+                    gap_perc = (gap / c_price) * 100
+                    gap_str = f"{gap_perc:.1f}%"
+                    
+                    # Colore Gap
+                    if gap > 0: c.setFillColorRGB(1, 0, 0) # Rosso
+                    else: c.setFillColorRGB(0, 0.5, 0) # Verde
+                    
                     if first_line:
-                        c.setFillColorRGB(0, 0, 0) # Nero per nome prodotto
+                        c.setFillColorRGB(0, 0, 0)
                         c.drawString(50, y, p_name)
                         c.drawString(300, y, f"€ {my_price:.2f}")
                         first_line = False
-                    
-                    # Ripristina colore gap per le colonne competitor
-                    if gap > 0: c.setFillColorRGB(1, 0, 0)
-                    else: c.setFillColorRGB(0, 0.5, 0)
+                        
+                        # Ripristina colore per dati competitor
+                        if gap > 0: c.setFillColorRGB(1, 0, 0) 
+                        else: c.setFillColorRGB(0, 0.5, 0)
 
-                    # Stampa Competitor
-                    comp_str = f"{c_name}: € {c_price:.2f}"
-                    c.drawString(380, y, comp_str)
+                    c.drawString(380, y, f"{c_name}: € {c_price:.2f}")
                     c.drawString(500, y, gap_str)
-                    
-                    y -= 15 # Prossima riga competitor
-            c.setFillColorRGB(0, 0, 0) # Reset color to black after each product block
-            y -= 15 # Add extra space between products
+                    y -= 15
             
+            c.setFillColorRGB(0, 0, 0)
+            y -= 5
+
         c.save()
-        print(f"PDF Generato: {filename}")
+        st.write(f"✅ PDF salvato correttamente: {filename}")
         return filename
+
     except Exception as e:
-        print(f"Errore generazione PDF: {e}")
+        # TRACEBACK ERRORI (Regola Sicurezza #3)
+        st.error(f"❌ CRASH TECNICO GENERAZIONE PDF: {e}")
+        st.write("Traceback errore:", e)
+        import traceback
+        st.code(traceback.format_exc())
         return None
 
 def send_email_report(user_email, pdf_path):
