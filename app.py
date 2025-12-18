@@ -528,31 +528,24 @@ def generate_pdf_report(user_id, owner, folder_id=None, is_test=False, custom_da
         return None
 
 def send_email_report(user_email, pdf_path):
+    # --- DEBUG START ---
+    st.write(f"Inizio procedura invio email a: {user_email}")
+    # --- DEBUG END ---
+    
     try:
-        # 1. Recupero Credenziali (Logica Robustezza)
-        email_user = None
-        email_pwd = None
+        # 1. Recupero Credenziali (Nuova Logica)
+        email_config = st.secrets.get("email")
+        if not email_config:
+            st.error("Configurazione email mancante nei Secrets!")
+            return False, "Missing config"
+
+        smtp_server = email_config.get("smtp_server", "smtp.gmail.com")
+        smtp_port = email_config.get("smtp_port", 587)
+        sender_email = email_config.get("address")
+        password = email_config.get("password")
         
-        # Prova a leggere dalla sezione [email]
-        if "email" in st.secrets:
-            try:
-                email_user = st.secrets["email"]["EMAIL_USER"]
-                email_pwd = st.secrets["email"]["EMAIL_PWD"]
-            except KeyError:
-                pass 
-        
-        # Fallback alla root se non trovati
-        if not email_user:
-            email_user = st.secrets.get("EMAIL_USER")
-            email_pwd = st.secrets.get("EMAIL_PWD")
-            
-        sender_email = email_user or "admin@pricecomparator.com"
-        sender_password = email_pwd or "password"
-        
-        # Se non ci sono credenziali reali, simuliamo
-        if not email_user:
-            print("⚠️ Nessuna credenziale email trovata (né in [email] né root). Simulo invio.")
-            # return True
+        # Debug Output (Password Nascosta)
+        st.write(f"Configurazione SMTP: {smtp_server}:{smtp_port} | Sender: {sender_email}")
         
         msg = MIMEMultipart()
         msg['From'] = sender_email
@@ -568,18 +561,27 @@ def send_email_report(user_email, pdf_path):
                 attach.add_header('Content-Disposition', 'attachment', filename=os.path.basename(pdf_path))
                 msg.attach(attach)
         
-        # Connessione SMTP (Gmail Example)
-        if email_user and email_pwd:
-            with smtplib.SMTP('smtp.gmail.com', 587) as server:
+        # Connessione SMTP con gestione errori dettagliata
+        st.write("Tentativo connessione SMTP...")
+        try:
+            with smtplib.SMTP(smtp_server, smtp_port) as server:
                 server.starttls()
-                server.login(sender_email, sender_password)
+                server.login(sender_email, password)
                 server.send_message(msg)
-        else:
-            print(f"Simulazione invio email a {user_email} con allegato {pdf_path}")
-            
-        return True, None
+                st.success("Email inviata correttamente al server SMTP.")
+                return True, None
+        except smtplib.SMTPAuthenticationError as e:
+            st.error(f"Errore Autenticazione SMTP: {e}")
+            return False, str(e)
+        except smtplib.SMTPConnectError as e:
+            st.error(f"Errore Connessione SMTP: {e}")
+            return False, str(e)
+        except Exception as e:
+             st.error(f"Errore Generico Invio SMTP: {e}")
+             return False, str(e)
+
     except Exception as e:
-        print(f"Errore invio email: {e}")
+        st.error(f"Errore procedura invio email: {e}")
         return False, str(e)
 
 def check_and_send_scheduled_reports(user_id, user_email):
@@ -1610,6 +1612,11 @@ with tab5:
     
     # Selettore Destinatario (Da tabella report_recipients)
     recipients = get_report_recipients(st.session_state['user'])
+    # DEBUG DESTINATARI
+    if recipients:
+        st.write(f"Trovati {len(recipients)} destinatari configurati.")
+    else:
+        st.warning("Nessun destinatario trovato per questo utente. Controlla il Tab 1.")
     
     if not recipients:
         st.warning("Nessun destinatario trovato. Creane uno in 'Gestione Destinatari Report' (Tab 1).")
@@ -1639,6 +1646,42 @@ with tab5:
             # AREA TEST DIAGNOSTICA
             st.markdown("### 🛠️ Area Test")
             st.info("Usa questa sezione per verificare se le email partono correttamente.")
+            
+            st.markdown("---")
+            st.subheader("🔧 Area Tecnica")
+
+            if st.button("TEST CONNESSIONE EMAIL (Debug SMTP)"):
+                import smtplib
+                try:
+                    # 1. Recupero credenziali
+                    email_conf = st.secrets.get("email")
+                    if not email_conf:
+                        st.error("ERRORE CRITICO: La sezione [email] non esiste nei secrets!")
+                        st.stop()
+                        
+                    smtp_server = email_conf.get("smtp_server", "smtp.gmail.com")
+                    smtp_port = email_conf.get("smtp_port", 587)
+                    email_address = email_conf.get("address")
+                    email_password = email_conf.get("password")
+                    
+                    st.info(f"Tentativo connessione a: {smtp_server}:{smtp_port} con utente: {email_address}")
+                    
+                    # 2. Connessione al Server
+                    server = smtplib.SMTP(smtp_server, smtp_port)
+                    st.write("✅ Connessione al server SMTP riuscita.")
+                    
+                    # 3. Avvio TLS
+                    server.starttls()
+                    st.write("✅ Canale sicuro (TLS) attivato.")
+                    
+                    # 4. Login
+                    server.login(email_address, email_password)
+                    st.success("🎉 LOGIN RIUSCITO! Password accettata. Il problema non sono le credenziali.")
+                    server.quit()
+                    
+                except Exception as e:
+                    st.error(f"❌ FALLITO: {e}")
+                    st.write("Se l'errore è 'Username and Password not accepted', verifica l'App Password.")
             
             if st.button("📨 Invia Email di Prova ADESSO"):
                 with st.spinner("Generazione e invio report di prova (Modalità URL Parsing)..."):
