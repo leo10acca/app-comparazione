@@ -388,12 +388,55 @@ def generate_pdf_report(user_id, owner, folder_id=None, is_test=False, custom_da
                 else:
                     df_merged = pd.DataFrame() # Vuoto se no links
  
-        # ... (rest of function) ...
+        # 2. CONTROLLO DATI VUOTI (Regola Sicurezza #2)
+        if not products:
+            st.error("❌ ERRORE PDF: Nessun prodotto trovato per questo utente!")
+            return None
+        else:
+            st.write(f"✅ Dati trovati: {len(products)} prodotti.")
 
+        # 3. CREAZIONE CANVAS
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = f"/tmp/report_prezzi_{timestamp}.pdf"
+        c = canvas.Canvas(filename, pagesize=letter)
+        
+        # --- GESTIONE LOGO SICURA (Regola Sicurezza #1) ---
+        try:
+            # Prova a cercare logo.png nella root corrente
+            logo_path = "logo.png" 
+            if os.path.exists(logo_path):
+                # Disegna logo (x, y, width, height) - Adatta coordinate se necessario
+                c.drawImage(logo_path, 50, 760, width=50, height=50, preserveAspectRatio=True, mask='auto')
+                st.write("✅ Logo inserito.")
+                # Spostiamo un po' i margini se c'è il logo
+                header_x = 110
+            else:
+                st.warning("⚠️ Logo 'logo.png' non trovato, proseguo senza.")
+                header_x = 50
+        except Exception as e_logo:
+            st.error(f"⚠️ Errore inserimento logo (ignorato): {e_logo}")
+            header_x = 50 # Fallback
+
+        # Intestazione
+        c.setFont("Helvetica-Bold", 16)
+        c.drawString(header_x, 780, "Report Comparazione Prezzi") 
+        c.setFont("Helvetica", 10)
+        c.drawString(header_x, 765, f"Generato il: {datetime.now().strftime('%d/%m/%Y %H:%M')}")
+        
+        y = 730 # INIZIALIZZAZIONE Y (Fondamentale)
+        c.setFont("Helvetica-Bold", 10)
+        c.drawString(50, y, "Prodotto")
+        c.drawString(300, y, "Tuo Prezzo")
+        c.drawString(380, y, "Competitor")
+        c.drawString(500, y, "Gap")
+        y -= 20
+        c.setFont("Helvetica", 9)
+        
         # 4. CICLO PRODOTTI
         for p in products:
             p_id = p['id']
-            # ...
+            my_price = p.get('prezzo', 0.0) or 0.0
+            p_name = p.get('descrizione', 'N/A')[:35]
             
             competitor_rows = []
             if not df_merged.empty and 'product_id' in df_merged.columns:
