@@ -1684,80 +1684,82 @@ with tab5:
                     st.write("Se l'errore è 'Username and Password not accepted', verifica l'App Password.")
             
             if st.button("📨 Invia Email di Prova ADESSO"):
-                with st.spinner("Generazione e invio report di prova (Modalità URL Parsing)..."):
+                import smtplib
+                # Nomi import per sicurezza, anche se già importati globalmente
+                from email.mime.multipart import MIMEMultipart
+                from email.mime.text import MIMEText
+                from email.mime.application import MIMEApplication
+                
+                # 1. Recupero Configurazione (Copia esatta del test funzionante)
+                email_conf = st.secrets.get("email")
+                if not email_conf:
+                    st.error("Configurazione email mancante.")
+                    st.stop()
+                    
+                smtp_server = email_conf.get("smtp_server", "smtp.gmail.com")
+                smtp_port = email_conf.get("smtp_port", 587)
+                email_address = email_conf.get("address")
+                email_password = email_conf.get("password")
+
+                # 2. Recupero Destinatario dal menu a tendina
+                if not selected_recipient_label: # Verifica che sia stato selezionato qualcuno
+                    st.warning("Seleziona prima un destinatario dal menu in alto.")
+                    st.stop()
+                
+                # Estraggo nome ed email dall'oggetto current_recipient
+                selected_recipient_name = current_recipient.get('client_name')
+                selected_recipient_email = current_recipient.get('target_email')
+                    
+                st.info(f"Avvio procedura per: {selected_recipient_name}...")
+
+                try:
+                    # 3. Generazione PDF (REALE - Usiamo la funzione esistente)
+                    st.write("📄 Generazione PDF in corso...")
+                    # Chiamiamo la funzione standard (senza custom_data)
+                    # Per essere sicuri che includa dati, passiamo l'owner corrente
+                    pdf_path = generate_pdf_report(recipient_id, owner=st.session_state['user'])
+                    
+                    if not pdf_path or not os.path.exists(pdf_path):
+                        st.error("Errore: Il PDF non è stato generato (cerca di capire perché dai log sopra).")
+                        st.stop()
+
+                    # Leggi i bytes del PDF per MIMEApplication
+                    with open(pdf_path, "rb") as f:
+                        pdf_bytes = f.read()
+                        
+                    st.write(f"✅ PDF Generato: {os.path.basename(pdf_path)}")
+
+                    # 4. Composizione Email
+                    msg = MIMEMultipart()
+                    msg['From'] = email_address
+                    msg['To'] = selected_recipient_email 
+                    msg['Subject'] = f"Report Prezzi - {selected_recipient_name}"
+                    
+                    body = "In allegato il report aggiornato dei prezzi."
+                    msg.attach(MIMEText(body, 'plain'))
+                    
+                    # Allegato
+                    part = MIMEApplication(pdf_bytes, Name=f"Report_{selected_recipient_name}.pdf")
+                    part['Content-Disposition'] = f'attachment; filename="Report_{selected_recipient_name}.pdf"'
+                    msg.attach(part)
+
+                    # 5. Invio Effettivo
+                    st.write(f"📤 Connessione a {smtp_server}...")
                     try:
-                        # 1. FETCH DATI (Solo Link e Prodotti)
-                        links_resp = supabase.table('competitor_links').select("product_id, competitor_url, last_price").eq("owner_username", st.session_state['user']).execute()
-                        links_data = links_resp.data
+                        server = smtplib.SMTP(smtp_server, smtp_port)
+                        server.starttls()
+                        server.login(email_address, email_password)
+                        server.send_message(msg)
+                        server.quit()
                         
-                        prods_resp = supabase.table('products').select("id, descrizione, prezzo").eq("owner_username", st.session_state['user']).execute()
-                        prods_data = prods_resp.data
+                        st.success(f"🚀 EMAIL INVIATA con successo a {selected_recipient_email}!")
+                        st.balloons()
+                    except Exception as smtp_e:
+                        st.error(f"❌ Errore SMTP: {smtp_e}")
                         
-                        
-                        if not links_data:
-                            st.warning("Nessun link competitor trovato nel database.")
-                        else:
-                            # 2. JOIN PANDAS (Products Only)
-                            df_links = pd.DataFrame(links_data)
-                            df_prods = pd.DataFrame(prods_data)
-                            
-                            if not df_links.empty: df_links['product_id'] = df_links['product_id'].astype(int)
-                            if not df_prods.empty: df_prods['id'] = df_prods['id'].astype(int)
-                            
-                            # Merge solo con Prodotti
-                            df_full = pd.merge(df_links, df_prods, left_on='product_id', right_on='id', how='left', suffixes=('', '_prod'))
-                            
-                            # 3. COMPETITOR NAME DA URL
-                            def extract_site_name(url):
-                                if not url or pd.isna(url): return "Manuale"
-                                try:
-                                    domain = urlparse(url).netloc
-                                    # Rimuovi www. e prendi la prima parte
-                                    name = domain.replace('www.', '').split('.')[0].capitalize()
-                                    return name if name else "Sconosciuto"
-                                except:
-                                    return "Link Errato"
-
-                            if 'competitor_url' in df_full.columns:
-                                df_full['competitor_name'] = df_full['competitor_url'].apply(extract_site_name)
-                            else:
-                                df_full['competitor_name'] = "N/A"
-
-                            
-                            # 4. MAPPING DATI PER PDF
-                            cleaned_data = []
-                            for idx, row in df_full.iterrows():
-                                p_name = row.get('descrizione', 'Prodotto Sconosciuto')
-                                if pd.isna(p_name): p_name = "Prodotto Sconosciuto"
-                                
-                                c_name = row.get('competitor_name', 'Competitor N/A')
-                                c_price = row.get('last_price', 0.0)
-                                
-                                u_price = row.get('prezzo', 0.0)
-                                if pd.isna(u_price): u_price = 0.0
-
-                                cleaned_data.append({
-                                    'product_name': p_name,
-                                    'user_price': float(u_price),
-                                    'competitor_name': c_name,
-                                    'competitor_price': float(c_price)
-                                })
-                            
-                            # PDF
-                            # Usiamo ID 0 o ID destinatario per compatibilità
-                            pdf = generate_pdf_report(recipient_id, owner=st.session_state['user'], custom_data=cleaned_data)
-                            
-                            if pdf:
-                                st.success(f"PDF Generato: {pdf}")
-                                # Email REALE al destinatario selezionato
-                                res, msg = send_email_report(target_email, pdf)
-                                if res: 
-                                    st.success(f"Email inviata a {target_email}!")
-                                else:
-                                    st.error(f"Errore invio: {msg}")
-
-                    except Exception as e:
-                        st.error(f"Errore URL Parsing: {e}")
+                except Exception as e:
+                    st.error(f"❌ Errore Generico: {e}")
+                    st.write("Dettaglio errore:", e)
 
 
 
