@@ -367,27 +367,36 @@ def generate_pdf_report(user_id, owner, folder_id=None, is_test=False, custom_da
                 p_ids = [p['id'] for p in products]
                 links_resp = supabase.table("competitor_links").select("*").in_("product_id", p_ids).execute()
                 links_data = links_resp.data
-                comps_resp = supabase.table("competitors").select("id, nome").execute()
+                # Fetch Competitor (Explicit Request: Map Names manually)
+                comps_resp = supabase.table("competitors").select("id, nome").eq("owner_username", owner).execute()
                 comps_data = comps_resp.data
                 
-                df_links = pd.DataFrame(links_data)
-                df_comps = pd.DataFrame(comps_data)
+                # 1. RECUPERA MAPPA NOMI
+                comp_map = {}
+                if comps_data:
+                    comp_map = {c['id']: c['nome'] for c in comps_data}
                 
-                if not df_links.empty and not df_comps.empty:
-                    # FIX: Controllo preventivo esistenza colonna (Richiesta Utente)
+                df_links = pd.DataFrame(links_data)
+                
+                # 2. APPLICA MAPPATURA
+                if not df_links.empty:
                     if 'competitor_id' in df_links.columns:
-                        df_links['competitor_id'] = df_links['competitor_id'].astype(int)
-                        df_comps['id'] = df_comps['id'].astype(int)
-                        df_merged = pd.merge(df_links, df_comps, left_on='competitor_id', right_on='id', how='left')
-                        df_merged = df_merged.rename(columns={'nome': 'competitor_name_resolved'})
+                        # Assicuriamoci che sia int per il mapping, gestendo NaN
+                        try:
+                            # Se ci sono NaN, fillna(0) o dropna
+                            df_links['competitor_id'] = df_links['competitor_id'].fillna(0).astype(int)
+                            df_links['competitor_name_real'] = df_links['competitor_id'].map(comp_map).fillna("Sconosciuto")
+                        except Exception as e:
+                            st.warning(f"Errore mapping competitor_id: {e}")
+                            df_links['competitor_name_real'] = "Err. Map"
                     else:
-                        st.warning(f"⚠️ Attenzione: colonna 'competitor_id' mancante. Colonne trovate: {list(df_links.columns)}")
-                        # Proseguo senza merge (usando solo i dati links)
-                        df_merged = df_links
-                        df_merged['competitor_name_resolved'] = "Sconosciuto (No ID)"
-                else:
+                        st.warning("Colonna 'competitor_id' mancante in df_links.")
+                        df_links['competitor_name_real'] = "Sconosciuto (No ID)"
+                    
+                    # Assegna a df_merged
                     df_merged = df_links
-                    if 'competitor_name' not in df_merged.columns: df_merged['competitor_name_resolved'] = "Sconosciuto"
+                else:
+                    df_merged = pd.DataFrame() # Vuoto se no links
 
         # 2. CONTROLLO DATI VUOTI (Regola Sicurezza #2)
         if not products:
@@ -443,8 +452,11 @@ def generate_pdf_report(user_id, owner, folder_id=None, is_test=False, custom_da
                 if not valid_subset.empty:
                     valid_subset = valid_subset.sort_values(by='last_price')
                     for _, row in valid_subset.iterrows():
-                        c_name = row.get('competitor_name_resolved')
-                        if pd.isna(c_name): c_name = row.get('competitor_name', 'Esterno')
+                        # FIX: Usa il nome reale mappato
+                        c_name = row.get('competitor_name_real')
+                        if pd.isna(c_name) or c_name == "Err. Map": 
+                             c_name = row.get('competitor_name_resolved', row.get('competitor_name', 'Esterno'))
+                        
                         competitor_rows.append((c_name, row['last_price']))
 
             # Rendering Righe
