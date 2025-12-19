@@ -1367,8 +1367,8 @@ with tab4:
 
         # 2. RECUPERO DATI (Join Products + Links) - FILTRATO
         try:
-            # Fetch Products (Filtrati per Cartella)
-            products_resp = supabase.table("products").select("id, descrizione, prezzo, codice").eq("is_tracked", True).eq("folder_id", selected_folder_id_t4).eq("owner_username", st.session_state['user']).execute()
+            # Fetch Products (Filtrati per Cartella) - FIX: Added 'url' to selection
+            products_resp = supabase.table("products").select("id, descrizione, prezzo, codice, url").eq("is_tracked", True).eq("folder_id", selected_folder_id_t4).eq("owner_username", st.session_state['user']).execute()
             products_data = products_resp.data
             
             if not products_data:
@@ -1379,6 +1379,14 @@ with tab4:
                 links_resp = supabase.table("competitor_links").select("*").in_("product_id", product_ids).eq("owner_username", st.session_state['user']).execute()
                 links_data = links_resp.data
                 
+                # Creazione Mappa Competitor (Domain -> Name)
+                competitors_list = get_competitors(st.session_state['user'])
+                comp_domain_map = {}
+                if competitors_list:
+                    for c in competitors_list:
+                         d = get_domain(c['url'])
+                         if d: comp_domain_map[d] = c['nome']
+
                 # Creazione DataFrame Comparazione (1 Riga per LINK)
                 rows = []
                 for p in products_data:
@@ -1409,12 +1417,27 @@ with tab4:
                         elif comp_price == 0:
                              status = "⚠️ Prezzo 0"
 
+                        # LOGICA NOME COMPETITOR (URL Matching)
+                        comp_url = link['competitor_url']
+                        comp_domain = get_domain(comp_url)
+                        # 1. Cerca match esatto dominio
+                        competitor_name = comp_domain_map.get(comp_domain)
+                        # 2. Se non trova, usa partial match
+                        if not competitor_name:
+                             for cd, cn in comp_domain_map.items():
+                                 if cd in comp_domain or comp_domain in cd:
+                                     competitor_name = cn
+                                     break
+                        # 3. Fallback: Usa quello nel link o Sconosciuto
+                        if not competitor_name:
+                            competitor_name = link.get('competitor_name', 'Sconosciuto')
+
                         rows.append({
                             "id": p['id'], # Aggiunto ID per eliminazione
                             "Codice": p.get('codice', ''),
                             "Prodotto": p['descrizione'],
                             "Tuo Prezzo": float(my_price) if my_price else 0.0,
-                            "Competitor": link.get('competitor_name', 'Sconosciuto'),
+                            "Competitor": competitor_name,
                             "Prezzo Competitor": float(comp_price) if comp_price else 0.0,
                             "Gap %": gap_perc,
                             "Status": status,
@@ -1544,14 +1567,38 @@ with tab4:
                 # 5. PULSANTE AGGIORNA PREZZI (MIRATO)
                 folder_name = selected_folder_t4['name']
                 if st.button(f"🔄 Aggiorna Prezzi: {folder_name}"):
-                    with st.spinner("Aggiornamento prezzi competitor in corso..."):
-                        # Logica scraping mirato
-                        # Recupera SOLO i link di questa cartella
-                        # (Già filtrati sopra in links_data)
-                        total_links = len(links_data)
-                        updated_count = 0
-                        
+                    # Import Scraper for My Products
+                    from scraper import scrape_single_product
+
+                    with st.spinner("Aggiornamento prezzi in corso..."):
                         progress_bar = st.progress(0)
+                        
+                        # A. AGGIORNA I MIEI PREZZI (Se hanno URL)
+                        st.write("Verifica i miei prezzi...")
+                        my_prods_with_url = [p for p in products_data if p.get('url')]
+                        total_ops = len(my_prods_with_url) + len(links_data)
+                        current_op = 0
+
+                        count_my_updates = 0
+                        for p in my_prods_with_url:
+                            try:
+                                # Scrape
+                                new_my_price = scrape_single_product(p['url'])
+                                if new_my_price and new_my_price > 0:
+                                    # Update DB
+                                    supabase.table("products").update({"prezzo": new_my_price}).eq("id", p['id']).eq("owner_username", st.session_state['user']).execute()
+                                    count_my_updates += 1
+                            except Exception as e:
+                                print(f"Error updating my price for {p['descrizione']}: {e}")
+                            
+                            current_op += 1
+                            progress_bar.progress(current_op / total_ops if total_ops > 0 else 0)
+                            # time.sleep(0.1)
+
+                        # B. AGGIORNA COMPETITOR LINKS
+                        st.write("Verifica prezzi competitor...")
+                        total_links = len(links_data)
+                        updated_count_links = 0
                         
                         # from scraper import get_price_from_url (RIMOSSO)
                         
@@ -1559,16 +1606,24 @@ with tab4:
                             url = link['competitor_url']
                             lid = link['id']
                             
+                            # Usa get_competitor_price_local (che usa requests+bs4 semplice)
+                            # O potremmo usare scrape_single_product che è più potente?
+                            # Usiamo quello esistente per ora per non rompere, o meglio scrape_single_product?
+                            # L'utente ha chiesto di modificare la funzione, lascio la logica esistente per i competitor se funziona,
+                            # ma la richiesta dice "Modifica la funzione... affinché esegua lo scraping ANCHE per i prodotti principali".
+                            # Non ha chiesto di cambiare quella dei competitor, ma "Solo DOPO esegui il ciclo di aggiornamento sui competitor_links".
+                            
                             new_price = get_competitor_price_local(url)
                             if new_price:
                                 supabase.table("competitor_links").update({"last_price": new_price, "last_check": "now()"}).eq("id", lid).execute()
-                                updated_count += 1
+                                updated_count_links += 1
                             
-                            progress_bar.progress((i + 1) / total_links)
+                            current_op += 1
+                            progress_bar.progress(current_op / total_ops if total_ops > 0 else 0)
                             time.sleep(0.5) # Gentilezza
                             
-                        st.success(f"Aggiornati {updated_count}/{total_links} link.")
-                        time.sleep(1)
+                        st.success(f"Aggiornamento Completato! I miei prodotti: {count_my_updates} aggiornati. Competitor: {updated_count_links}/{total_links} aggiornati.")
+                        time.sleep(2)
                         st.rerun()
 
                 # 4. VISUALIZZAZIONE STYLING
@@ -1579,7 +1634,7 @@ with tab4:
                     if 0 <= val < 10: return "background-color: #fff3cd; color: orange" # Giallo (Attenzione)
                     return "background-color: #f8d7da; color: red; font-weight: bold" # Rosso (Perdiamo)
 
-                cols_display = ["Codice", "Prodotto", "Tuo Prezzo", "Prezzo Competitor", "Gap %", "Status"]
+                cols_display = ["Codice", "Prodotto", "Tuo Prezzo", "Competitor", "Prezzo Competitor", "Gap %", "Status"]
                 
                 st.dataframe(
                     df_compare[cols_display].style.map(style_gap_column, subset=['Gap %']).format({
